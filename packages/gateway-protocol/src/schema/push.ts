@@ -71,6 +71,7 @@ const WebPushQuietHoursSchema = closedObject({
 export const WebPushNotificationPreferencesSchema = closedObject({
   categories: WebPushCategoryPreferencesSchema,
   detailLevel: WebPushDetailLevelSchema,
+  answerPreviewConsentVersion: Type.Optional(Type.Literal(1)),
   quietHours: WebPushQuietHoursSchema,
   agentIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),
 });
@@ -88,6 +89,7 @@ export const WebPushDevicePreferencesSchema = closedObject({
     }),
   ),
   detailLevel: Type.Optional(WebPushDetailLevelSchema),
+  answerPreviewConsentVersion: Type.Optional(Type.Literal(1)),
   quietHours: Type.Optional(WebPushQuietHoursSchema),
   agentIds: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),

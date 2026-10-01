@@ -1326,7 +1326,16 @@ const enSettings = {
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
       lockScreenDetail: "Lock-screen detail",
-      lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
+      lockScreenDetailHint:
+        "Private hides names. Detailed can show answer text after you enable answer previews.",
+      enableAnswerPreviews: "Enable answer previews",
+      answerPreviews: "Answer previews",
+      accountAnswerPreviewsHint:
+        "Show short final-answer excerpts in Agent finished notifications. Private answer text may appear on lock screens of every browser or installed app using these account defaults, including future devices.",
+      deviceAnswerPreviewsHint:
+        "Show short final-answer excerpts in Agent finished notifications on this browser or installed app. Private answer text may appear on its lock screen.",
+      inheritAnswerPreviewsHint:
+        "Uses the account detail level and answer preview setting together. To choose separately for this browser or installed app, select a detail level above.",
       private: "Private",
       namesOnly: "Names only",
       detailed: "Detailed",

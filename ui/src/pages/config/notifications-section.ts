@@ -177,8 +177,20 @@ function renderUserNotificationPreferences(
           description: t("configView.notifications.lockScreenDetailHint"),
           value: preferences.detailLevel,
           options: detailLevelOptions(),
-          onChange: (value) => patch({ detailLevel: detailLevel(value) }),
+          onChange: (value) =>
+            patch({ detailLevel: detailLevel(value), answerPreviewConsentVersion: undefined }),
         })}
+        ${
+          preferences.detailLevel === "detailed"
+            ? renderSettingsToggleRow({
+                title: t("configView.notifications.enableAnswerPreviews"),
+                description: t("configView.notifications.accountAnswerPreviewsHint"),
+                checked: preferences.answerPreviewConsentVersion === 1,
+                onChange: (enabled) =>
+                  patch({ answerPreviewConsentVersion: enabled ? 1 : undefined }),
+              })
+            : nothing
+        }
         ${renderSettingsToggleRow({
           title: t("configView.notifications.quietHours"),
           checked: preferences.quietHours.enabled,
@@ -199,6 +211,7 @@ function renderUserNotificationPreferences(
 
 function renderDeviceNotificationPreferences(
   preferences: WebPushDevicePreferences,
+  effective: WebPushNotificationPreferences,
   onChange: (preferences: WebPushDevicePreferences) => void,
 ) {
   const patch = (next: Partial<WebPushDevicePreferences>) => onChange({ ...preferences, ...next });
@@ -227,14 +240,42 @@ function renderDeviceNotificationPreferences(
         })}
         ${renderSettingsSelectRow({
           title: t("configView.notifications.lockScreenDetail"),
+          description: t("configView.notifications.lockScreenDetailHint"),
           value: preferences.detailLevel ?? "inherit",
           options: [
             { value: "inherit", label: t("configView.notifications.inheritDetail") },
             ...detailLevelOptions(),
           ],
           onChange: (value) =>
-            patch({ detailLevel: value === "inherit" ? undefined : detailLevel(value) }),
+            patch({
+              detailLevel: value === "inherit" ? undefined : detailLevel(value),
+              answerPreviewConsentVersion: undefined,
+            }),
         })}
+        ${
+          preferences.detailLevel === "detailed"
+            ? renderSettingsToggleRow({
+                title: t("configView.notifications.enableAnswerPreviews"),
+                description: t("configView.notifications.deviceAnswerPreviewsHint"),
+                checked: preferences.answerPreviewConsentVersion === 1,
+                onChange: (enabled) =>
+                  patch({ answerPreviewConsentVersion: enabled ? 1 : undefined }),
+              })
+            : preferences.detailLevel === undefined
+              ? renderSettingsRow({
+                  title: t("configView.notifications.answerPreviews"),
+                  description: t("configView.notifications.inheritAnswerPreviewsHint"),
+                  control: renderSettingsValue(
+                    t(
+                      effective.detailLevel === "detailed" &&
+                        effective.answerPreviewConsentVersion === 1
+                        ? "configForm.enumOn"
+                        : "configForm.enumOff",
+                    ),
+                  ),
+                })
+              : nothing
+        }
         ${renderSettingsSelectRow({
           title: t("configView.notifications.quietHours"),
           value:
@@ -591,8 +632,10 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                     )
                   : nothing
               }
-              ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
-                props.onWebPushSetDevicePreferences?.(preferences),
+              ${renderDeviceNotificationPreferences(
+                push.preferences.device,
+                push.preferences.effective,
+                (preferences) => props.onWebPushSetDevicePreferences?.(preferences),
               )}
             </div>`
           : nothing

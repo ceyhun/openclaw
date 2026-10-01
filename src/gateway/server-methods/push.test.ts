@@ -610,7 +610,13 @@ describe("bound Web Push handlers", () => {
   );
 
   it("updates device preferences only while the subscription binding matches", async () => {
-    const preferences = { enabled: false, label: "phone", categories: { humanMentioned: true } };
+    const preferences = {
+      enabled: false,
+      label: "phone",
+      categories: { humanMentioned: true },
+      detailLevel: "detailed",
+      answerPreviewConsentVersion: 1,
+    };
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
       endpoint: "https://push.example.test/subscription",
       scope: "device",
@@ -627,6 +633,44 @@ describe("bound Web Push handlers", () => {
       guard: expect.objectContaining({ assertCurrent: expect.any(Function) }),
     });
     expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
+  });
+
+  it("forwards account preview consent and removes it from older full-object replacements", async () => {
+    const subscription = expectDefined(
+      await findBoundWebPushSubscriptionByEndpoint({
+        endpoint: "https://push.example.test/subscription",
+      }),
+      "bound subscription fixture",
+    );
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
+      ...subscription,
+      userProfileId: "profile-owner",
+    });
+    const legacyPreferences = {
+      categories: {
+        approvalRequested: true,
+        agentFinished: true,
+        agentQuestion: false,
+        humanMentioned: false,
+        scheduledTaskFailed: false,
+      },
+      detailLevel: "detailed",
+      quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+      agentIds: [],
+    };
+    const consentedPreferences = { ...legacyPreferences, answerPreviewConsentVersion: 1 };
+    for (const preferences of [consentedPreferences, legacyPreferences]) {
+      const { respond, invoke } = createBoundWebPushInvokeParams(
+        "push.web.preferences.set",
+        { endpoint: subscription.endpoint, scope: "user", preferences },
+        { userProfileId: "profile-owner" },
+      );
+      await invoke();
+      expect(setUserPreferences).toHaveBeenLastCalledWith("profile-owner", {
+        "notifications.web.v1": preferences,
+      });
+      expect(firstRespondCall(respond)).toEqual([true, { scope: "user", preferences }, undefined]);
+    }
   });
 
   it.each([undefined, true, false])(

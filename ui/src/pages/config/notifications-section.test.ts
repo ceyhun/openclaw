@@ -3,6 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { renderNotificationsSection } from "./notifications-section.ts";
 
 const userPreferences = {
@@ -238,4 +242,185 @@ describe("Web Push preference controls", () => {
     detail.dispatchEvent(new Event("change"));
     expect(onDevice).toHaveBeenLastCalledWith(expect.objectContaining({ detailLevel: "detailed" }));
   });
+});
+
+describe("Web Push answer preview consent", () => {
+  function renderPreferences(options: {
+    user: WebPushNotificationPreferences;
+    device: WebPushDevicePreferences;
+    effective?: WebPushNotificationPreferences;
+  }) {
+    const container = document.createElement("div");
+    const onUser = vi.fn<(preferences: WebPushNotificationPreferences) => void>();
+    const onDevice = vi.fn<(preferences: WebPushDevicePreferences) => void>();
+    const update = (user = options.user, device = options.device) => {
+      render(
+        renderNotificationsSection({
+          connected: true,
+          onWebPushSetUserPreferences: onUser,
+          onWebPushSetDevicePreferences: onDevice,
+          webPush: {
+            supported: true,
+            permission: "granted",
+            subscription: "registered",
+            loading: false,
+            preferences: {
+              durableIdentity: true,
+              user,
+              device,
+              effective: { ...userPreferences, ...options.effective, enabled: true, label: "" },
+            },
+          },
+        }),
+        container,
+      );
+    };
+    update();
+    const group = (scope: "account" | "device") =>
+      expectDefined(
+        container.querySelectorAll<HTMLElement>(".settings-stack .settings-group")[
+          scope === "account" ? 0 : 1
+        ],
+        `${scope} preferences`,
+      );
+    const toggle = (scope: "account" | "device", name: string) =>
+      expectDefined(
+        [...group(scope).querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch")].find(
+          (entry) => entry.textContent?.trim() === name,
+        ),
+        name,
+      );
+    const chooseDetail = (scope: "account" | "device", value: string) => {
+      const select = expectDefined(
+        group(scope).querySelector<HTMLSelectElement>('select[aria-label="Lock-screen detail"]'),
+        `${scope} detail`,
+      );
+      select.value = value;
+      select.dispatchEvent(new Event("change"));
+    };
+    return { container, group, toggle, chooseDetail, update, onUser, onDevice };
+  }
+
+  it.each(["account", "device"] as const)(
+    "requires a disclosed explicit opt-in for existing Detailed %s preferences",
+    (scope) => {
+      const user: WebPushNotificationPreferences = {
+        ...userPreferences,
+        detailLevel: "detailed",
+        ...(scope === "device" ? { answerPreviewConsentVersion: 1 as const } : {}),
+      };
+      const device: WebPushDevicePreferences = {
+        enabled: true,
+        label: "",
+        detailLevel: "detailed",
+      };
+      const view = renderPreferences({ user, device });
+      const onChange = scope === "account" ? view.onUser : view.onDevice;
+      const preview = view.toggle(scope, "Enable answer previews");
+      expect(preview.checked).toBe(false);
+      expect(view.group(scope).textContent).toContain("Private answer text may appear on");
+      expect(view.group(scope).textContent).toContain(
+        scope === "account" ? "including future devices" : "on its lock screen",
+      );
+      expect(onChange).not.toHaveBeenCalled();
+
+      const unrelated = view.toggle(
+        scope,
+        scope === "account" ? "Agent finished" : "Deliver to this browser or app",
+      );
+      unrelated.checked = !unrelated.checked;
+      unrelated.dispatchEvent(new Event("change"));
+      expect(onChange).toHaveBeenCalledOnce();
+      expect(onChange.mock.lastCall?.[0].answerPreviewConsentVersion).toBeUndefined();
+
+      preview.checked = true;
+      preview.dispatchEvent(new Event("change"));
+      expect(onChange.mock.lastCall?.[0]).toMatchObject({
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
+      });
+
+      preview.checked = false;
+      preview.dispatchEvent(new Event("change"));
+      expect(onChange.mock.lastCall?.[0].answerPreviewConsentVersion).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["account", "private"],
+    ["account", "identified"],
+    ["device", "private"],
+    ["device", "identified"],
+    ["device", "inherit"],
+  ] as const)("clears %s consent through %s before returning to Detailed", (scope, detail) => {
+    const user: WebPushNotificationPreferences = {
+      ...userPreferences,
+      detailLevel: "detailed",
+      answerPreviewConsentVersion: 1,
+    };
+    const device: WebPushDevicePreferences = {
+      enabled: true,
+      label: "",
+      detailLevel: "detailed",
+      answerPreviewConsentVersion: 1,
+    };
+    const view = renderPreferences({ user, device });
+    const onChange = scope === "account" ? view.onUser : view.onDevice;
+    expect(view.toggle(scope, "Enable answer previews").checked).toBe(true);
+    view.chooseDetail(scope, detail);
+    expect(onChange.mock.lastCall?.[0]).toMatchObject({
+      detailLevel: detail === "inherit" ? undefined : detail,
+    });
+    expect(onChange.mock.lastCall?.[0].answerPreviewConsentVersion).toBeUndefined();
+
+    const applySavedPreferences = () => {
+      if (scope === "account") {
+        view.update(
+          expectDefined(view.onUser.mock.lastCall, "saved account preferences")[0],
+          device,
+        );
+      } else {
+        view.update(
+          user,
+          expectDefined(view.onDevice.mock.lastCall, "saved device preferences")[0],
+        );
+      }
+    };
+    applySavedPreferences();
+    expect(view.group(scope).textContent).not.toContain("Enable answer previews");
+    view.chooseDetail(scope, "detailed");
+    expect(onChange.mock.lastCall?.[0].answerPreviewConsentVersion).toBeUndefined();
+    applySavedPreferences();
+    expect(view.toggle(scope, "Enable answer previews").checked).toBe(false);
+  });
+
+  it.each([undefined, 1] as const)(
+    "shows inherited preview status without borrowing account consent for a Detailed override (%s)",
+    (consent) => {
+      const user: WebPushNotificationPreferences = {
+        ...userPreferences,
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: consent,
+      };
+      const device: WebPushDevicePreferences = { enabled: true, label: "" };
+      const view = renderPreferences({ user, device, effective: user });
+      const row = expectDefined(
+        [...view.group("device").querySelectorAll(".settings-row")].find(
+          (entry) => entry.querySelector(".settings-row__title")?.textContent === "Answer previews",
+        ),
+        "inherited answer previews",
+      );
+      expect(row.textContent).toContain(
+        "Uses the account detail level and answer preview setting together",
+      );
+      expect(row.querySelector(".settings-row__value")?.textContent).toBe(consent ? "On" : "Off");
+      expect(row.querySelector("wa-switch")).toBeNull();
+
+      view.chooseDetail("device", "detailed");
+      const saved = expectDefined(view.onDevice.mock.lastCall, "saved device preferences")[0];
+      expect(saved.answerPreviewConsentVersion).toBeUndefined();
+      view.update(user, saved);
+      expect(view.toggle("device", "Enable answer previews").checked).toBe(false);
+    },
+  );
 });

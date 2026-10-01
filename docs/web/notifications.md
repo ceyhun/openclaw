@@ -55,9 +55,17 @@ Selecting an attention notification opens its question, conversation, or automat
 
 The detail levels are:
 
-- **Private** — generic attention text only.
-- **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
-- **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+- **Private** — generic attention text only, without conversation labels or answer excerpts.
+- **Names only** — may include a sanitized person, session, device, agent, task, or automation label, without answer excerpts.
+- **Detailed** — includes the same permitted labels. For **Agent finished** only, it can also include a short plain-text preview of the final assistant answer after you turn on **Enable answer previews**.
+
+Answer previews are off until you explicitly enable them. Existing **Detailed** settings remain labels-only after an upgrade. Selecting **Detailed**, opening Settings, or changing another preference does not enable previews. The preview control warns that private answer text may appear on lock screens before you turn it on.
+
+Under **Account defaults**, enabling previews applies to every browser or installed Control UI app that uses those defaults, including future devices. **This browser or app** inherits both the account detail level and its preview setting together. Choosing an explicit **Detailed** override for this browser requires its own preview opt-in; it does not borrow the account opt-in. Choosing **Private** or **Names only** clears the preview opt-in at that scope. Selecting **Detailed** again requires you to re-enable previews.
+
+**Agent finished** previews use the final visible assistant answer and an authorized explicit conversation label when available. Previews are limited to 240 UTF-16 code units, including an ellipsis when shortened, without splitting surviving Unicode grapheme clusters. Control characters and Unicode format characters, including emoji joiners, use the same escaping rules as notification labels. This keeps them in line with OpenClaw's short conversation previews; the browser may display less. Missing labels use a generic title; missing usable preview text uses a generic completion body. Answers longer than 16,384 UTF-16 code units also use that fallback so notification formatting stays bounded. Silent replies, runs waiting for child agents, transcript mirrors, and empty completions do not produce answer previews or completion alerts. Reasoning, tool calls and results, diagnostics, and raw errors stay out of previews.
+
+Answer previews are not added to notification logs or stored notification records. Once delivered, the browser or operating system may retain the displayed text in notification history. Turning previews off affects future sends; dismiss existing notifications separately. Selecting a notification still opens the authenticated conversation. Other notification categories continue to exclude message excerpts, raw prompts, command arguments, output, environment values, and errors. These preview settings do not change Telegram or native OpenClaw app notifications.
 
 On iPhone and iPad, Web Push is available only after two steps. First, install the Control UI with **Share → Add to Home Screen**. Then open that installed app. A normal Safari tab remains usable for the Control UI. In that tab, the Notifications page reports the install requirement. It does not attempt to dereference an unavailable `PushManager`.
 

@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
+import { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
+import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronExecutionId } from "../cron/run-id.js";
+import { sanitizeExecApprovalDisplayTextWithStatus } from "../infra/exec-approval-text-sanitize.js";
 import {
   isWebPushQuietHours,
   normalizeWebPushDisplayLabel,
@@ -17,8 +22,19 @@ import {
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
+import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
+import { takeAssistantManagedMediaUrlsForDisplay } from "./chat-display-projection.helpers.js";
+import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
+import {
+  normalizeLiveAssistantBufferedText,
+  projectLiveAssistantBufferedText,
+} from "./live-chat-projector.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
@@ -31,6 +47,11 @@ import {
 } from "./web-push-authority.js";
 
 const EVENT_PUSH_TTL_SECONDS = 5 * 60;
+// Match the session-preview default, including the truncation ellipsis.
+const ANSWER_PREVIEW_MAX_LENGTH = 240;
+// Match the display sanitizer's 16K-code-unit budget before Markdown parsing,
+// whose malformed-link patterns can otherwise rescan an arbitrarily long answer.
+const ANSWER_PREVIEW_MAX_INPUT_LENGTH = 16 * 1024;
 const defaultLog = createSubsystemLogger("gateway/web-push");
 
 type EventNotification = {
@@ -38,9 +59,86 @@ type EventNotification = {
   title: string;
   body: string;
   identifiedBody?: string;
+  answerText?: string;
   tag: string;
   path?: string;
 };
+
+/** Null suppresses completion; empty text permits a visible nontext answer's fallback. */
+function resolveCompletedAnswerText(value: Record<string, unknown>): string | null {
+  const message = isRecord(value.message) ? value.message : undefined;
+  if (
+    !message ||
+    message.role !== "assistant" ||
+    message.display === false ||
+    value.errorMessage != null ||
+    message.errorMessage != null ||
+    message.isError === true ||
+    [value.stopReason, message.stopReason].some(
+      (reason) => reason === "error" || reason === "aborted",
+    ) ||
+    isTranscriptOnlyOpenClawAssistantMessage(message) ||
+    isOpenClawMessageToolMirrorAssistantMessage(message)
+  ) {
+    return null;
+  }
+  // Select final-answer phases before the history projector flattens mixed tool
+  // content and discards text signatures. Its visibility decision still applies.
+  const answer = resolveRawAssistantAnswerText(projectAssistantDisplayContent(message));
+  if (isSilentReplyPayloadText(answer)) {
+    return null;
+  }
+  // Reject failures before the display projector can turn them into friendly error copy.
+  const projected = projectChatDisplayMessage(message, { maxChars: Number.MAX_SAFE_INTEGER });
+  if (!projected) {
+    return null;
+  }
+  const managedMedia = takeAssistantManagedMediaUrlsForDisplay({ ...message }, "assistant");
+  const normalized = normalizeLiveAssistantBufferedText(stripInternalMetadataForDisplay(answer), {
+    final: true,
+    managedMediaUrls: managedMedia.urls,
+  });
+  if (isSilentReplyPayloadText(normalized)) {
+    return null;
+  }
+  const visible = projectLiveAssistantBufferedText(normalized, { suppressLeadFragments: false });
+  if (answer.trim()) {
+    return visible.suppress ? null : visible.text;
+  }
+  // Tool calls/results and reasoning are not visible completion fallbacks. The
+  // producer can legitimately finish with a canvas or media answer and no prose.
+  return Array.isArray(projected.content) &&
+    projected.content.some(
+      (block) =>
+        isRecord(block) &&
+        ["canvas", "image", "audio", "video", "attachment"].includes(String(block.type)),
+    )
+    ? ""
+    : null;
+}
+
+function normalizeAnswerPreview(answer: string): string | undefined {
+  if (answer.length > ANSWER_PREVIEW_MAX_INPUT_LENGTH) {
+    return undefined;
+  }
+  const sanitized = sanitizeExecApprovalDisplayTextWithStatus(flattenMarkdownToPlainText(answer));
+  // Never surface an approval-specific size diagnostic as an assistant answer.
+  if (sanitized.oversized || !sanitized.text) {
+    return undefined;
+  }
+  if (sanitized.text.length <= ANSWER_PREVIEW_MAX_LENGTH) {
+    return sanitized.text;
+  }
+  const end = findGraphemeChunkEnd(
+    sanitized.text,
+    0,
+    ANSWER_PREVIEW_MAX_LENGTH - 1,
+    ANSWER_PREVIEW_MAX_LENGTH - 1,
+    false,
+  );
+  const prefix = sanitized.text.slice(0, end).trimEnd();
+  return prefix ? `${prefix}…` : undefined;
+}
 
 export type HumanMentionWebPush = {
   id: string;
@@ -71,17 +169,17 @@ function resolveEventWebPushNotification(
       ...(questionId ? { path: `ask/${encodeURIComponent(questionId)}` } : {}),
     };
   }
-  if (
-    event === "chat" &&
-    value.state === "final" &&
-    value.yielded !== true &&
-    !isTranscriptOnlyOpenClawAssistantMessage(value.message)
-  ) {
+  if (event === "chat" && value.state === "final" && value.yielded !== true) {
+    const answerText = resolveCompletedAnswerText(value);
+    if (answerText === null) {
+      return null;
+    }
     const runId = normalizeWebPushDisplayLabel(value.runId) ?? "finished";
     return {
       category: "agent-finished",
       title: "OpenClaw agent finished",
       body: "An agent completed its response.",
+      answerText,
       tag: `openclaw-agent-finished-${runId}`,
     };
   }
@@ -209,12 +307,29 @@ export function createEventWebPushDelivery(params: {
               continue;
             }
             const prefix = preferences.label ? `${preferences.label} · ` : "";
-            const title = `${prefix}${notification.title}`;
-            const body =
+            let title = `${prefix}${notification.title}`;
+            let body =
               preferences.detailLevel === "private"
                 ? notification.body
                 : (notification.identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
+            if (
+              notification.category === "agent-finished" &&
+              preferences.detailLevel === "detailed"
+            ) {
+              const sessionLabel =
+                sessionKeys.length === 1 && sessionKey
+                  ? normalizeWebPushDisplayLabel(
+                      authority.sessions.get(sessionKey)?.target?.entry?.label,
+                    )
+                  : undefined;
+              if (sessionLabel) {
+                title += ` — ${sessionLabel}`;
+              }
+              if (preferences.answerPreviewConsentVersion === 1) {
+                body = normalizeAnswerPreview(notification.answerText ?? "") ?? body;
+              }
+            }
             const key = JSON.stringify({ title, body });
             const group = groups.get(key) ?? { title, body, subscriptions: [] };
             group.subscriptions.push(target.subscription);

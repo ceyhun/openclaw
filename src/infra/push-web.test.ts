@@ -410,6 +410,8 @@ describe("subscription CRUD", () => {
           enabled: true,
           label: "Slot 1",
           categories: { agentQuestion: true },
+          detailLevel: "detailed",
+          answerPreviewConsentVersion: 1,
         },
         stateDir: tmpDir,
       }),
@@ -423,6 +425,8 @@ describe("subscription CRUD", () => {
         enabled: true,
         label: "Slot 1",
         categories: { agentQuestion: true },
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
       },
     });
 
@@ -433,8 +437,29 @@ describe("subscription CRUD", () => {
     expect(
       await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }),
     ).toMatchObject({
-      devicePreferences: { enabled: true, label: "Slot 1" },
+      devicePreferences: {
+        enabled: true,
+        label: "Slot 1",
+        detailLevel: "detailed",
+        answerPreviewConsentVersion: 1,
+      },
     });
+
+    // Older clients replace the full preference object without preview consent.
+    expect(
+      await setWebPushSubscriptionPreferences({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: "profile-1",
+        preferences: { enabled: true, label: "Slot 1", detailLevel: "detailed" },
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+    expect(
+      (await findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir }))
+        ?.devicePreferences,
+    ).toEqual({ enabled: true, label: "Slot 1", detailLevel: "detailed" });
 
     await registerSubscription(endpoint, {
       keys: { p256dh: "refreshed-p256dh", auth: "refreshed-auth" },

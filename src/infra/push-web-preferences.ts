@@ -58,6 +58,13 @@ function detailLevel(value: unknown): WebPushDetailLevel | undefined {
   return value === "private" || value === "identified" || value === "detailed" ? value : undefined;
 }
 
+function normalizeAnswerPreviewConsentVersion(
+  value: unknown,
+  normalizedDetailLevel: WebPushDetailLevel | undefined,
+): 1 | undefined {
+  return normalizedDetailLevel === "detailed" && value === 1 ? 1 : undefined;
+}
+
 function normalizeAgentIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -120,10 +127,16 @@ export function normalizeWebPushNotificationPreferences(
   value: unknown,
 ): WebPushNotificationPreferences {
   const source = isRecord(value) ? value : {};
+  const normalizedDetailLevel =
+    detailLevel(source.detailLevel) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.detailLevel;
+  const answerPreviewConsentVersion = normalizeAnswerPreviewConsentVersion(
+    source.answerPreviewConsentVersion,
+    normalizedDetailLevel,
+  );
   return {
     categories: normalizeCategoryDefaults(source.categories),
-    detailLevel:
-      detailLevel(source.detailLevel) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.detailLevel,
+    detailLevel: normalizedDetailLevel,
+    ...(answerPreviewConsentVersion ? { answerPreviewConsentVersion } : {}),
     quietHours:
       normalizeQuietHours(source.quietHours) ??
       DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.quietHours,
@@ -142,6 +155,10 @@ export function normalizeWebPushDevicePreferences(value: unknown): WebPushDevice
       )
     : undefined;
   const normalizedDetailLevel = detailLevel(source.detailLevel);
+  const answerPreviewConsentVersion = normalizeAnswerPreviewConsentVersion(
+    source.answerPreviewConsentVersion,
+    normalizedDetailLevel,
+  );
   const normalizedQuietHours = normalizeQuietHours(source.quietHours);
   const normalizedAgentIds = normalizeAgentIds(source.agentIds);
   return {
@@ -149,6 +166,7 @@ export function normalizeWebPushDevicePreferences(value: unknown): WebPushDevice
     label: normalizeWebPushDisplayLabel(source.label) ?? "",
     ...(categories && Object.keys(categories).length > 0 ? { categories } : {}),
     ...(normalizedDetailLevel ? { detailLevel: normalizedDetailLevel } : {}),
+    ...(answerPreviewConsentVersion ? { answerPreviewConsentVersion } : {}),
     ...(normalizedQuietHours ? { quietHours: normalizedQuietHours } : {}),
     ...(normalizedAgentIds ? { agentIds: normalizedAgentIds } : {}),
   };
@@ -160,11 +178,16 @@ export function resolveEffectiveWebPushPreferences(params: {
 }): WebPushNotificationPreferences & { enabled: boolean; label: string } {
   const user = normalizeWebPushNotificationPreferences(params.user);
   const device = normalizeWebPushDevicePreferences(params.device);
+  // A device detail override must carry its own consent; account consent cannot widen it.
+  const answerPreviewConsentVersion = device.detailLevel
+    ? device.answerPreviewConsentVersion
+    : user.answerPreviewConsentVersion;
   return {
     enabled: device.enabled,
     label: device.label,
     categories: { ...user.categories, ...device.categories },
     detailLevel: device.detailLevel ?? user.detailLevel,
+    ...(answerPreviewConsentVersion ? { answerPreviewConsentVersion } : {}),
     quietHours: device.quietHours ?? user.quietHours,
     agentIds: device.agentIds ?? user.agentIds,
   };
